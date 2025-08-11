@@ -1,0 +1,194 @@
+# docker-compose.test.yml
+# Docker Compose configuration for running tests
+
+version: '3.8'
+
+services:
+  # Main test runner
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: pkpd-test:latest
+    container_name: pkpd-test-runner
+    volumes:
+      - ./R:/app/R:ro
+      - ./tests:/app/tests:ro
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+      - ./test-results:/app/test-results
+      - ./coverage-reports:/app/coverage-reports
+    environment:
+      - CI=true
+      - R_LIBS_USER=/app/renv/library
+      - TESTTHAT_PARALLEL=true
+      - TESTTHAT_CPUS=4
+    command: >
+      bash -c "
+        echo 'Starting test suite...' &&
+        Rscript run_all_tests.R &&
+        echo 'Tests completed!'
+      "
+    networks:
+      - test-network
+
+  # Database for integration tests
+  test-db:
+    image: postgres:15-alpine
+    container_name: pkpd-test-db
+    environment:
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+      - POSTGRES_DB=pkpd_test
+    ports:
+      - "5432:5432"
+    volumes:
+      - test-db-data:/var/lib/postgresql/data
+      - ./tests/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - test-network
+
+  # Redis for session testing
+  test-redis:
+    image: redis:7-alpine
+    container_name: pkpd-test-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - test-network
+
+  # Security scanner
+  security-scanner:
+    image: aquasec/trivy:latest
+    container_name: pkpd-security-scanner
+    volumes:
+      - .:/scan:ro
+      - ./test-results/security:/results
+    command: >
+      filesystem 
+      --format json
+      --output /results/trivy-report.json
+      --severity CRITICAL,HIGH,MEDIUM
+      --exit-code 0
+      /scan
+    networks:
+      - test-network
+
+  # Code quality checker
+  code-quality:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: pkpd-code-quality
+    volumes:
+      - ./R:/app/R:ro
+      - ./tests:/app/tests:ro
+      - ./test-results/quality:/results
+    command: >
+      bash -c "
+        echo 'Running code quality checks...' &&
+        Rscript -e 'lintr::lint_dir(\"R\")' > /results/lint-report.txt &&
+        Rscript -e 'goodpractice::gp()' > /results/goodpractice-report.txt &&
+        echo 'Code quality checks completed!'
+      "
+    networks:
+      - test-network
+
+  # Performance benchmarker
+  benchmarker:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: pkpd-benchmarker
+    volumes:
+      - ./R:/app/R:ro
+      - ./tests:/app/tests:ro
+      - ./benchmark-results:/app/benchmark-results
+    environment:
+      - BENCHMARK_ITERATIONS=100
+    command: >
+      bash -c "
+        echo 'Running performance benchmarks...' &&
+        Rscript tests/performance/benchmark.R &&
+        echo 'Benchmarks completed!'
+      "
+    networks:
+      - test-network
+
+  # Coverage reporter
+  coverage-reporter:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: pkpd-coverage
+    volumes:
+      - ./R:/app/R:ro
+      - ./tests:/app/tests:ro
+      - ./coverage-reports:/app/coverage-reports
+    environment:
+      - CODECOV_TOKEN=${CODECOV_TOKEN}
+    command: >
+      bash -c "
+        echo 'Generating coverage report...' &&
+        Rscript -e '
+          cov <- covr::package_coverage(type = \"tests\");
+          covr::report(cov, file = \"/app/coverage-reports/coverage.html\");
+          print(covr::percent_coverage(cov));
+        ' &&
+        echo 'Coverage report generated!'
+      "
+    networks:
+      - test-network
+
+  # Documentation builder
+  docs-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: pkpd-docs
+    volumes:
+      - .:/app
+      - ./docs:/app/docs
+    command: >
+      bash -c "
+        echo 'Building documentation...' &&
+        Rscript -e 'devtools::document()' &&
+        Rscript -e 'pkgdown::build_site(dest = \"docs\")' &&
+        echo 'Documentation built!'
+      "
+    networks:
+      - test-network
+
+  # Load tester (for stress testing)
+  load-tester:
+    image: grafana/k6:latest
+    container_name: pkpd-load-tester
+    volumes:
+      - ./tests/load:/scripts:ro
+      - ./test-results/load:/results
+    environment:
+      - K6_OUT=json=/results/load-test.json
+    command: run /scripts/load-test.js
+    networks:
+      - test-network
+    depends_on:
+      - test-runner
+
+networks:
+  test-network:
+    driver: bridge
+    name: pkpd-test-network
+
+volumes:
+  test-db-data:
+    name: pkpd-test-db-data

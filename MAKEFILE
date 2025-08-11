@@ -1,0 +1,215 @@
+# Makefile for PK/PD Application Testing
+# Run tests with simple make commands
+
+.PHONY: all test coverage security performance integration clean help docker benchmark lint check install
+
+# Default target
+all: test
+
+# Colors for output
+RED := \033[0;31m
+GREEN := \033[0;32m
+YELLOW := \033[1;33m
+NC := \033[0m # No Color
+
+# Help target
+help:
+	@echo "$(GREEN)═══════════════════════════════════════════════════════════$(NC)"
+	@echo "$(GREEN)           PK/PD Application Test Suite - Help              $(NC)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════════$(NC)"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  $(YELLOW)make test$(NC)        - Run all tests"
+	@echo "  $(YELLOW)make coverage$(NC)    - Run tests with coverage report"
+	@echo "  $(YELLOW)make security$(NC)    - Run security tests only"
+	@echo "  $(YELLOW)make performance$(NC) - Run performance tests only"
+	@echo "  $(YELLOW)make integration$(NC) - Run integration tests only"
+	@echo "  $(YELLOW)make benchmark$(NC)   - Run performance benchmarks"
+	@echo "  $(YELLOW)make lint$(NC)        - Run code linting"
+	@echo "  $(YELLOW)make check$(NC)       - Run R CMD check"
+	@echo "  $(YELLOW)make docker$(NC)      - Build and run tests in Docker"
+	@echo "  $(YELLOW)make clean$(NC)       - Clean test artifacts"
+	@echo "  $(YELLOW)make install$(NC)     - Install dependencies"
+	@echo "  $(YELLOW)make report$(NC)      - Generate HTML test report"
+	@echo "  $(YELLOW)make ci$(NC)          - Run full CI pipeline"
+	@echo ""
+
+# Install dependencies
+install:
+	@echo "$(GREEN)Installing dependencies...$(NC)"
+	@Rscript -e "if (!require('remotes')) install.packages('remotes')"
+	@Rscript -e "remotes::install_deps(dependencies = TRUE)"
+	@Rscript -e "if (!require('testthat')) install.packages('testthat')"
+	@Rscript -e "if (!require('covr')) install.packages('covr')"
+	@Rscript -e "if (!require('lintr')) install.packages('lintr')"
+	@Rscript -e "if (!require('styler')) install.packages('styler')"
+	@echo "$(GREEN)✓ Dependencies installed$(NC)"
+
+# Run all tests
+test:
+	@echo "$(GREEN)Running all tests...$(NC)"
+	@Rscript -e "source('run_all_tests.R'); results <- run_all_tests(coverage = FALSE)"
+	@if [ $$? -eq 0 ]; then \
+		echo "$(GREEN)✓ All tests passed$(NC)"; \
+	else \
+		echo "$(RED)✗ Tests failed$(NC)"; \
+		exit 1; \
+	fi
+
+# Run tests with coverage
+coverage:
+	@echo "$(GREEN)Running tests with coverage...$(NC)"
+	@Rscript -e "source('run_all_tests.R'); results <- run_all_tests(coverage = TRUE)"
+	@echo "$(GREEN)Opening coverage report in browser...$(NC)"
+	@Rscript -e "covr::report(covr::package_coverage(type = 'tests'), browse = TRUE)"
+
+# Run security tests only
+security:
+	@echo "$(GREEN)Running security tests...$(NC)"
+	@Rscript -e "testthat::test_file('tests/testthat/test-security.R', reporter = 'progress')"
+
+# Run performance tests only
+performance:
+	@echo "$(GREEN)Running performance tests...$(NC)"
+	@Rscript -e "testthat::test_file('tests/testthat/test-performance.R', reporter = 'progress')"
+
+# Run integration tests only
+integration:
+	@echo "$(GREEN)Running integration tests...$(NC)"
+	@Rscript -e "testthat::test_file('tests/testthat/test-integration.R', reporter = 'progress')"
+
+# Run bug fix tests only
+fixes:
+	@echo "$(GREEN)Running bug fix tests...$(NC)"
+	@Rscript -e "testthat::test_file('tests/testthat/test-fixes.R', reporter = 'progress')"
+
+# Run performance benchmarks
+benchmark:
+	@echo "$(GREEN)Running performance benchmarks...$(NC)"
+	@Rscript tests/performance/benchmark.R
+	@echo "$(GREEN)✓ Benchmarks completed. Results saved to benchmark-results.json$(NC)"
+
+# Code linting
+lint:
+	@echo "$(GREEN)Running code linter...$(NC)"
+	@Rscript -e "lintr::lint_dir('R')"
+	@Rscript -e "lintr::lint_dir('tests')"
+	@echo "$(GREEN)✓ Linting completed$(NC)"
+
+# Style checking and formatting
+style:
+	@echo "$(GREEN)Checking code style...$(NC)"
+	@Rscript -e "styler::style_dir('R')"
+	@Rscript -e "styler::style_dir('tests')"
+	@echo "$(GREEN)✓ Code styling completed$(NC)"
+
+# R CMD check
+check:
+	@echo "$(GREEN)Running R CMD check...$(NC)"
+	@R CMD build .
+	@R CMD check *.tar.gz
+	@rm -f *.tar.gz
+
+# Generate test report
+report:
+	@echo "$(GREEN)Generating test report...$(NC)"
+	@Rscript -e "source('run_all_tests.R'); results <- run_all_tests(); generate_html_report(results)"
+	@echo "$(GREEN)✓ Report generated: test_report.html$(NC)"
+
+# Docker operations
+docker-build:
+	@echo "$(GREEN)Building Docker test environment...$(NC)"
+	@docker build -f Dockerfile.test -t pkpd-test .
+	@echo "$(GREEN)✓ Docker image built: pkpd-test$(NC)"
+
+docker-test: docker-build
+	@echo "$(GREEN)Running tests in Docker...$(NC)"
+	@docker run --rm -v $$(pwd)/test-results:/app/test-results pkpd-test
+
+docker: docker-test
+
+# Clean test artifacts
+clean:
+	@echo "$(YELLOW)Cleaning test artifacts...$(NC)"
+	@rm -rf test-results/
+	@rm -rf coverage-reports/
+	@rm -rf benchmark-results/
+	@rm -f test_report.html
+	@rm -f benchmark-results.json
+	@rm -f benchmark_*.png
+	@rm -f *.tar.gz
+	@rm -rf *.Rcheck/
+	@echo "$(GREEN)✓ Clean completed$(NC)"
+
+# CI pipeline (all checks)
+ci: install lint test coverage benchmark check
+	@echo "$(GREEN)═══════════════════════════════════════════════════════════$(NC)"
+	@echo "$(GREEN)                  CI Pipeline Completed                      $(NC)"
+	@echo "$(GREEN)═══════════════════════════════════════════════════════════$(NC)"
+
+# Watch for changes and run tests
+watch:
+	@echo "$(GREEN)Watching for changes...$(NC)"
+	@while true; do \
+		inotifywait -e modify -r R/ tests/ 2>/dev/null || fswatch -r R/ tests/ ; \
+		clear; \
+		make test; \
+	done
+
+# Quick test (subset of tests for development)
+quick:
+	@echo "$(GREEN)Running quick tests...$(NC)"
+	@Rscript -e "testthat::test_file('tests/testthat/test-fixes.R', reporter = 'summary')"
+
+# Parallel test execution
+parallel:
+	@echo "$(GREEN)Running tests in parallel...$(NC)"
+	@Rscript -e "testthat::test_dir('tests/testthat', reporter = 'progress', parallel = TRUE)"
+
+# Memory leak detection
+memcheck:
+	@echo "$(GREEN)Checking for memory leaks...$(NC)"
+	@R -d valgrind -e "testthat::test_dir('tests/testthat')"
+
+# Profile test performance
+profile:
+	@echo "$(GREEN)Profiling test performance...$(NC)"
+	@Rscript -e "profvis::profvis({ testthat::test_dir('tests/testthat') })"
+
+# Generate documentation
+docs:
+	@echo "$(GREEN)Generating documentation...$(NC)"
+	@Rscript -e "devtools::document()"
+	@Rscript -e "pkgdown::build_site()"
+
+# Deployment check
+deploy-check: ci
+	@echo "$(GREEN)Checking deployment readiness...$(NC)"
+	@echo "$(GREEN)✓ All checks passed - ready for deployment$(NC)"
+
+# Version bump
+version-patch:
+	@Rscript -e "usethis::use_version('patch')"
+
+version-minor:
+	@Rscript -e "usethis::use_version('minor')"
+
+version-major:
+	@Rscript -e "usethis::use_version('major')"
+
+# Test database
+test-db:
+	@echo "$(GREEN)Setting up test database...$(NC)"
+	@Rscript -e "source('tests/setup/create_test_db.R')"
+
+# Performance comparison
+compare:
+	@echo "$(GREEN)Comparing performance with baseline...$(NC)"
+	@Rscript -e "source('tests/performance/benchmark.R'); compare_benchmarks('baseline.json', 'benchmark-results.json')"
+
+# Coverage threshold check
+coverage-check:
+	@echo "$(GREEN)Checking coverage threshold...$(NC)"
+	@Rscript -e "cov <- covr::package_coverage(); pct <- covr::percent_coverage(cov); if (pct < 80) stop('Coverage below 80%')"
+
+.SILENT: help

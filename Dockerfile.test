@@ -1,0 +1,99 @@
+# Dockerfile.test
+# Docker container for running PK/PD application tests
+
+FROM rocker/verse:4.3.2
+
+LABEL maintainer="PK/PD Development Team"
+LABEL description="Test environment for PK/PD Shiny Application"
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
+ENV LANG=en_US.UTF-8
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    libsodium-dev \
+    libglpk-dev \
+    cmake \
+    pandoc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Stan and cmdstanr
+RUN R -e "install.packages('cmdstanr', repos = c('https://mc-stan.org/r-packages/', getOption('repos')))" \
+    && R -e "cmdstanr::install_cmdstan(cores = 4)"
+
+# Create app directory
+WORKDIR /app
+
+# Copy DESCRIPTION file for dependency installation
+COPY DESCRIPTION ./DESCRIPTION
+
+# Install R package dependencies
+RUN R -e "install.packages('remotes')" \
+    && R -e "remotes::install_deps(dependencies = TRUE)"
+
+# Install additional testing packages
+RUN R -e "install.packages(c( \
+    'testthat', \
+    'covr', \
+    'mockery', \
+    'shinytest2', \
+    'lintr', \
+    'styler', \
+    'goodpractice', \
+    'spelling', \
+    'rhub', \
+    'pkgdown', \
+    'bench', \
+    'profvis', \
+    'microbenchmark' \
+    ), repos = 'https://cran.rstudio.com/')"
+
+# Copy application code
+COPY R/ ./R/
+COPY tests/ ./tests/
+COPY models/ ./models/
+COPY data/ ./data/
+COPY inst/ ./inst/
+COPY man/ ./man/
+COPY NAMESPACE ./NAMESPACE
+COPY run_all_tests.R ./run_all_tests.R
+
+# Create directories for test outputs
+RUN mkdir -p /app/test-results \
+    && mkdir -p /app/coverage-reports \
+    && mkdir -p /app/benchmark-results
+
+# Set permissions
+RUN chmod -R 755 /app
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD R -e "q(status = 0)" || exit 1
+
+# Default command runs all tests
+CMD ["Rscript", "-e", "source('run_all_tests.R'); run_all_tests(coverage = TRUE)"]
+
+# Alternative commands for different test scenarios
+# Run specific test category:
+# docker run pkpd-test Rscript -e "testthat::test_file('tests/testthat/test-security.R')"
+#
+# Run with coverage report:
+# docker run pkpd-test Rscript -e "covr::report(covr::package_coverage())"
+#
+# Run linting:
+# docker run pkpd-test Rscript -e "lintr::lint_dir('R')"
+#
+# Run performance benchmarks:
+# docker run pkpd-test Rscript -e "source('tests/performance/benchmark.R')"
